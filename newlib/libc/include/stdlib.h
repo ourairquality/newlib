@@ -53,6 +53,10 @@ typedef struct
 typedef int (*__compar_fn_t) (const _PTR, const _PTR);
 #endif
 
+#ifndef NULL
+#define NULL 0
+#endif
+
 #define EXIT_FAILURE 1
 #define EXIT_SUCCESS 0
 
@@ -122,8 +126,12 @@ int	_EXFUN(mkstemp,(char *));
 #if __MISC_VISIBLE
 int	_EXFUN(mkstemps,(char *, int));
 #endif
+#if (__GNUC__ < 4) || defined(__XTENSA__)
+char *	_EXFUN(mktemp,(char *));
+#else
 #if __BSD_VISIBLE || (__XSI_VISIBLE >= 4 && __POSIX_VISIBLE < 200112)
 char *	_EXFUN(mktemp,(char *) _ATTRIBUTE ((__deprecated__("the use of `mktemp' is dangerous; use `mkstemp' instead"))));
+#endif
 #endif
 #endif /* !_REENT_ONLY */
 char *	_EXFUN(_mkdtemp_r, (struct _reent *, char *));
@@ -131,7 +139,11 @@ int	_EXFUN(_mkostemp_r, (struct _reent *, char *, int));
 int	_EXFUN(_mkostemps_r, (struct _reent *, char *, int, int));
 int	_EXFUN(_mkstemp_r, (struct _reent *, char *));
 int	_EXFUN(_mkstemps_r, (struct _reent *, char *, int));
+#if (__GNUC__ < 4) || defined(__XTENSA__)
+char *	_EXFUN(_mktemp_r, (struct _reent *, char *));
+#else
 char *	_EXFUN(_mktemp_r, (struct _reent *, char *) _ATTRIBUTE ((__deprecated__("the use of `mktemp' is dangerous; use `mkstemp' instead"))));
+#endif
 _VOID	_EXFUN(qsort,(_PTR __base, size_t __nmemb, size_t __size, __compar_fn_t _compar));
 int	_EXFUN(rand,(_VOID));
 _PTR	_EXFUN_NOTHROW(realloc,(_PTR __r, size_t __size));
