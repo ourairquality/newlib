@@ -185,6 +185,13 @@
 #define __CUSTOM_FILE_IO__
 #endif
 
+#ifdef __XTENSA__
+#include <xtensa/config/core-isa.h>
+#define MALLOC_ALIGNMENT ((XCHAL_DATA_WIDTH) < 16 ? 16 : (XCHAL_DATA_WIDTH))
+/* esp8266-specific: shrink the default fd buffer size */
+#define __BUFSIZ__ 128
+#endif
+
 /* This block should be kept in sync with GCC's limits.h.  The point
    of having these definitions here is to not include limits.h, which
    would pollute the user namespace, while still using types of the
