@@ -112,9 +112,13 @@ stdout_init(FILE *ptr)
 static inline void
 stderr_init(FILE *ptr)
 {
+#ifdef __XTENSA__
+  std (ptr, __SWR | __SNBF, 2);
+#else
   /* POSIX requires stderr to be opened for reading and writing, even
      when the underlying fd 2 is write-only.  */
   std (ptr, __SRW | __SNBF, 2);
+#endif
 }
 
 struct glue_with_file {
@@ -254,6 +258,7 @@ __sinit (struct _reent *s)
 
   /* make sure we clean up on exit */
   s->__cleanup = _cleanup_r;	/* conservative */
+  s->__sdidinit = 1;
 
   s->__sglue._next = NULL;
 #ifndef _REENT_SMALL

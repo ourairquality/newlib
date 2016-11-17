@@ -448,6 +448,14 @@
 #define __IEEE_BIG_ENDIAN
 #endif
 
+#if (defined(__XTENSA__))
+# ifdef __XTENSA_EB__
+#  define __IEEE_BIG_ENDIAN
+# else
+#  define __IEEE_LITTLE_ENDIAN
+# endif
+#endif
+
 #ifndef __OBSOLETE_MATH_DEFAULT
 /* Use old math code by default.  */
 #define __OBSOLETE_MATH_DEFAULT 1

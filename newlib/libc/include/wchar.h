@@ -164,7 +164,6 @@ double _wcstod_r (struct _reent *, const wchar_t *, wchar_t **);
 #if __ISO_C_VISIBLE >= 1999
 float wcstof (const wchar_t *__restrict, wchar_t **__restrict);
 #endif
-float _wcstof_r (struct _reent *, const wchar_t *, wchar_t **);
 #if __XSI_VISIBLE
 int	wcswidth (const wchar_t *, size_t);
 #endif

@@ -57,6 +57,10 @@ typedef struct
 typedef int (*__compar_fn_t) (const void *, const void *);
 #endif
 
+#ifndef NULL
+#define NULL 0
+#endif
+
 #define EXIT_FAILURE 1
 #define EXIT_SUCCESS 0
 
@@ -126,8 +130,12 @@ int	mkstemp (char *);
 #if __MISC_VISIBLE
 int	mkstemps (char *, int);
 #endif
+#if (__GNUC__ < 4) || defined(__XTENSA__)
+char *	_EXFUN(mktemp,(char *));
+#else
 #if __BSD_VISIBLE || (__XSI_VISIBLE >= 4 && __POSIX_VISIBLE < 200112)
 char *	mktemp (char *) _ATTRIBUTE ((__deprecated__("the use of `mktemp' is dangerous; use `mkstemp' instead")));
+#endif
 #endif
 #endif /* !_REENT_ONLY */
 char *	_mkdtemp_r (struct _reent *, char *);

@@ -17,8 +17,25 @@
 /*
  * close -- We don't need to do anything, but pretend we did.
  */
+
+#ifndef REENTRANT_SYSCALLS_PROVIDED
+
 int
 close  (int fd)
 {
   return (0);
 }
+
+#else /* REENTRANT_SYSCALLS_PROVIDED */
+
+#include <sys/reent.h>
+
+int
+_DEFUN (_close_r, (ptr, fd),
+	struct _reent *ptr _AND
+	int fd)
+{
+  return 0;
+}
+
+#endif /* REENTRANT_SYSCALLS_PROVIDED */

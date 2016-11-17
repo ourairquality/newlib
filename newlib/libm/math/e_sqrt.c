@@ -81,6 +81,7 @@
  *---------------
  */
 
+#include <xtensa/config/core-isa.h>
 #include "fdlibm.h"
 
 #ifndef _DOUBLE_IS_32BITS
@@ -450,3 +451,4 @@ B.  sqrt(x) by Reciproot Iteration
     (4)	Special cases (see (4) of Section A).	
  
  */
+
