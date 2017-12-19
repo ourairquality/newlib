@@ -416,6 +416,8 @@ struct _reent
   __FILE *__sf;			        /* file descriptors */
   struct _misc_reent *_misc;            /* strtok, multibyte states */
   char *_signal_buf;                    /* strsignal */
+
+  unsigned int malloc_region_mask;
 };
 
 #ifdef _REENT_GLOBAL_STDIO_STREAMS
@@ -482,7 +484,8 @@ extern const struct __sFILE_fake __sf_fake_stderr;
     {_NULL, 0, _NULL}, \
     _NULL, \
     _NULL, \
-    _NULL \
+    _NULL, \
+    0 \
   }
 
 #define _REENT_INIT_PTR_ZEROED(var) \

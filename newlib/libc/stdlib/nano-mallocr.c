@@ -49,6 +49,8 @@
 
 #define _SBRK_R(X) _sbrk_r(X)
 
+int _malloc_region_masked(void *r, unsigned int mask);
+
 #ifdef INTERNAL_NEWLIB
 
 #include <sys/config.h>
@@ -163,6 +165,11 @@ extern chunk * free_list;
 extern char * sbrk_start;
 extern struct mallinfo current_mallinfo;
 
+extern unsigned nano_malloc_region_total_0;
+extern unsigned nano_malloc_region_free_0;
+extern unsigned nano_malloc_region_total_1;
+extern unsigned nano_malloc_region_free_1;
+
 /* Forward function declarations */
 extern void * nano_malloc(RARG malloc_size_t);
 extern void nano_free (RARG void * free_p);
@@ -195,6 +202,11 @@ chunk * free_list = NULL;
 
 /* Starting point of memory allocated from system */
 char * sbrk_start = NULL;
+
+unsigned nano_malloc_region_total_0;
+unsigned nano_malloc_region_free_0;
+unsigned nano_malloc_region_total_1;
+unsigned nano_malloc_region_free_1;
 
 /** Function sbrk_aligned
   * Algorithm:
@@ -238,6 +250,7 @@ void * nano_malloc(RARG malloc_size_t s)
     int offset;
 
     malloc_size_t alloc_size;
+    unsigned int mask, pre_mask, post_mask;
 
     alloc_size = ALIGN_TO(s, CHUNK_ALIGN); /* size of aligned data load */
     alloc_size += MALLOC_PADDING; /* padding */
@@ -255,8 +268,75 @@ void * nano_malloc(RARG malloc_size_t s)
     p = free_list;
     r = p;
 
+    /* Two mask sets are packed into one. If these are equal then only
+     * one pass is made searching for a free region. This allows a
+     * preferred set to be search first. The pre_mask set is a subset
+     * of the post_mask set - this is enforced. */
+    mask = reent_ptr->malloc_region_mask;
+    pre_mask = mask >> 16;
+    post_mask = mask & pre_mask;
+
+    if (nano_malloc_region_free_0 < 12 * 1024 && (post_mask & 2) != 2) {
+      // Search elsewhere first.
+      pre_mask = 0xfffd;
+    }
+
+    /* If the pre pass would check the same set or nothing then skip it. */
+    if (pre_mask != post_mask && pre_mask != 0xffff) {
+      while (r)
+	{
+	  if (_malloc_region_masked(r, pre_mask)) {
+	    p=r;
+	    r=r->next;
+	    continue;
+	  }
+
+	  int rem = r->size - alloc_size;
+	  if (rem >= 0)
+	    {
+	      if (rem >= MALLOC_MINCHUNK)
+		{
+		  /* Find a chunk that much larger than required size, break
+		   * it into two chunks and return the second one */
+		  r->size = rem;
+		  r = (chunk *)((char *)r + rem);
+		  r->size = alloc_size;
+		}
+	      /* Find a chunk that is exactly the size or slightly bigger
+	       * than requested size, just return this chunk */
+	      else if (p == r)
+		{
+		  /* Now it implies p==r==free_list. Move the free_list
+		   * to next chunk */
+		  free_list = r->next;
+		}
+	      else
+		{
+		  /* Normal case. Remove it from free_list */
+		  p->next = r->next;
+		}
+	      break;
+	    }
+	  p=r;
+	  r=r->next;
+	}
+    } else {
+      r = NULL;
+    }
+
+    if (r == NULL) {
+      // try again.
+      p = free_list;
+      r = p;
+
     while (r)
     {
+      if (mask && _malloc_region_masked(r, post_mask)) {
+          p=r;
+          r=r->next;
+          continue;
+        }
+
         int rem = r->size - alloc_size;
         if (rem >= 0)
         {
@@ -286,21 +366,24 @@ void * nano_malloc(RARG malloc_size_t s)
         p=r;
         r=r->next;
     }
+      }
 
-    /* Failed to find a appropriate chunk. Ask for more memory */
+    /* Failed to find an appropriate chunk. Ask for more memory */
     if (r == NULL)
     {
-        r = sbrk_aligned(RCALL alloc_size);
-
-        /* sbrk returns -1 if fail to allocate */
-        if (r == (void *)-1)
-        {
-            RERRNO = ENOMEM;
-            MALLOC_UNLOCK;
-            return NULL;
-        }
-        r->size = alloc_size;
+	RERRNO = ENOMEM;
+	MALLOC_UNLOCK;
+	return NULL;
     }
+
+    /* Account for the allocation. TODO avoid baking in constants here?? */
+    if ((uint32_t)r < 0x40000000) {
+      /* Dram */
+      nano_malloc_region_free_0 -= r->size;
+    } else {
+      nano_malloc_region_free_1 -= r->size;
+    }
+
     MALLOC_UNLOCK;
 
     ptr = (char *)r + CHUNK_OFFSET;
@@ -332,6 +415,10 @@ void * nano_malloc(RARG malloc_size_t s)
 #endif /* DEFINE_MALLOC */
 
 #ifdef DEFINE_FREE
+extern unsigned nano_malloc_region_total_0;
+extern unsigned nano_malloc_region_free_0;
+extern unsigned nano_malloc_region_total_1;
+extern unsigned nano_malloc_region_free_1;
 #define MALLOC_CHECK_DOUBLE_FREE
 
 /** Function nano_free
@@ -353,6 +440,15 @@ void nano_free (RARG void * free_p)
     p_to_free = get_chunk_from_ptr(free_p);
 
     MALLOC_LOCK;
+
+    /* Account for the allocation */
+    if ((uint32_t)free_p < 0x40000000) {
+      /* Dram */
+      nano_malloc_region_free_0 += p_to_free->size;
+    } else {
+      nano_malloc_region_free_1 += p_to_free->size;
+    }
+
     if (free_list == NULL)
     {
         /* Set first free list element */
@@ -409,6 +505,7 @@ void nano_free (RARG void * free_p)
     else if ((char *)p + p->size > (char *)p_to_free)
     {
         /* Report double free fault */
+        iprintf("** Warning: double free %p\n", p);
         RERRNO = ENOMEM;
         MALLOC_UNLOCK;
         return;
@@ -431,6 +528,27 @@ void nano_free (RARG void * free_p)
     }
     MALLOC_UNLOCK;
 }
+
+/* Insert a disjoint region into the nano malloc pool. Create a malloc chunk,
+ * filling the size as newlib nano malloc expects, and then free it. */
+void nano_malloc_insert_chunk(void *start, size_t size)
+{
+    if (size < MALLOC_MINCHUNK) {
+      return;
+    }
+
+    *(uint32_t *)start = size;
+    free(start + sizeof(size_t));
+
+    /* Account for the allocation */
+    if ((uint32_t)start < 0x40000000) {
+      /* Dram */
+      nano_malloc_region_total_0 += size;
+    } else {
+      nano_malloc_region_total_1 += size;
+    }
+}
+
 #endif /* DEFINE_FREE */
 
 #ifdef DEFINE_CFREE
@@ -491,11 +609,20 @@ struct mallinfo nano_mallinfo(RONEARG)
     chunk * pf;
     size_t free_size = 0;
     size_t total_size;
+    unsigned int mask, pre_mask, post_mask;
+
+    mask = reent_ptr->malloc_region_mask;
+    pre_mask = mask >> 16;
+    post_mask = mask & pre_mask;
 
     MALLOC_LOCK;
 
-    if (sbrk_start == NULL) total_size = 0;
-    else {
+#if 0
+    if (sbrk_start == NULL) {
+        total_size = 0;
+    } else if (_malloc_region_masked(sbrk_start, post_mask)) {
+        total_size = 0;
+    } else {
         sbrk_now = _SBRK_R(RCALL 0);
 
         if (sbrk_now == (void *)-1)
@@ -504,8 +631,24 @@ struct mallinfo nano_mallinfo(RONEARG)
             total_size = (size_t) (sbrk_now - sbrk_start);
     }
 
-    for (pf = free_list; pf; pf = pf->next)
+    /* TODO add in the size of other regions */
+
+    for (pf = free_list; pf; pf = pf->next) {
+      if (!_malloc_region_masked(pf, post_mask)) {
         free_size += pf->size;
+      }
+    }
+#endif
+
+    if ((post_mask & 1) == 0) {
+      total_size += nano_malloc_region_total_0;
+      free_size += nano_malloc_region_free_0;
+    }
+
+    if ((post_mask & 2) == 0) {
+      total_size += nano_malloc_region_total_1;
+      free_size += nano_malloc_region_free_1;
+    }
 
     current_mallinfo.arena = total_size;
     current_mallinfo.fordblks = free_size;
