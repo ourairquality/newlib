@@ -576,6 +576,7 @@ case "${host}" in
 	;;
   xtensa*-*-* | xtensa*-*)
 	sys_dir=xtensa
+	unix_dir=unix
 	;;
   z8k-*-coff)
 	sys_dir=z8ksim
@@ -867,6 +868,7 @@ newlib_cflags="${newlib_cflags} -DCLOCK_PROVIDED -DMALLOC_PROVIDED -DEXIT_PROVID
   xtensa*-*-* | xtensa*-*)
 	syscall_dir=syscalls
 	newlib_cflags="${newlib_cflags} -DHAVE_RENAME_R -DHAVE_GETTIMEOFDAY -I."
+	newlib_cflags="${newlib_cflags} -D_NO_GETCWD -D_NO_GETPASS -D_NO_GETUT -D_NO_TTYNAME -D_NO_GETLOGIN -D_NO_GETPWENT"
 	;;
   z8k-*-*)
 	syscall_dir=syscalls
