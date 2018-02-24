@@ -120,17 +120,17 @@ const _device dev_piper_storage =
 const _device dev_pipew_storage =
   {"", {FH_PIPEW}, "", exists_internal};
 
-const _device dev_tcp_storage =
-  {"", {FH_TCP}, "", exists_internal};
+const _device dev_socket_storage =
+  {"", {FH_SOCKET}, "", exists_internal};
 
-const _device dev_udp_storage =
-  {"", {FH_UDP}, "", exists_internal};
+const _device dev_af_inet_storage =
+  {"", {FH_INET}, "", exists_internal};
 
-const _device dev_stream_storage =
-  {"", {FH_STREAM}, "", exists_internal};
+const _device dev_af_unix_storage =
+  {"", {FH_UNIX}, "", exists_internal};
 
-const _device dev_dgram_storage =
-  {"", {FH_DGRAM}, "", exists_internal};
+const _device dev_af_local_storage =
+  {"", {FH_LOCAL}, "", exists_internal};
 
 const _device dev_bad_storage =
   {"", {FH_NADA}, "", exists_internal};
