@@ -197,7 +197,7 @@ extern _READ_WRITE_RETURN_TYPE __swrite64 (struct _reent *, void *,
 
 /* Called by the main entry point fns to ensure stdio has been initialized.  */
 
-#ifdef _REENT_SMALL
+#if defined(_REENT_SMALL) && !defined(_REENT_GLOBAL_STDIO_STREAMS)
 #define CHECK_INIT(ptr, fp) \
   do								\
     {								\

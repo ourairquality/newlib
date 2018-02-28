@@ -26,7 +26,7 @@
 #include <sys/lock.h>
 #include "local.h"
 
-#ifdef _REENT_SMALL
+#if defined(_REENT_SMALL) && !defined(_REENT_GLOBAL_STDIO_STREAMS)
 const struct __sFILE_fake __sf_fake_stdin =
     {_NULL, 0, 0, 0, 0, {_NULL, 0}, 0, _NULL};
 const struct __sFILE_fake __sf_fake_stdout =
@@ -73,7 +73,7 @@ std (FILE *ptr,
 #else /* _STDIO_CLOSE_STD_STREAMS */
   ptr->_close = NULL;
 #endif /* _STDIO_CLOSE_STD_STREAMS */
-#if !defined(__SINGLE_THREAD__) && !defined(_REENT_SMALL)
+#if !defined(__SINGLE_THREAD__) && !(defined(_REENT_SMALL) && !defined(_REENT_GLOBAL_STDIO_STREAMS))
   __lock_init_recursive (ptr->_lock);
   /*
    * #else
@@ -274,9 +274,15 @@ __sinit (struct _reent *s)
      __sinit if it's 0. */
   if (s == _GLOBAL_REENT)
     s->__sdidinit = 1;
+# ifndef _REENT_GLOBAL_STDIO_STREAMS
   s->_stdin = __sfp(s);
   s->_stdout = __sfp(s);
   s->_stderr = __sfp(s);
+# else
+  s->_stdin = &__sf[0];
+  s->_stdout = &__sf[1];
+  s->_stderr = &__sf[2];
+# endif
 #endif
 
 #ifdef _REENT_GLOBAL_STDIO_STREAMS
