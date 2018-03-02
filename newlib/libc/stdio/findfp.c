@@ -265,7 +265,7 @@ __sinit (struct _reent *s)
 # ifndef _REENT_GLOBAL_STDIO_STREAMS
   s->__sglue._niobs = 3;
   s->__sglue._iobs = &s->__sf[0];
-# endif
+# endif /* _REENT_GLOBAL_STDIO_STREAMS */
 #else
   s->__sglue._niobs = 0;
   s->__sglue._iobs = NULL;
@@ -278,11 +278,11 @@ __sinit (struct _reent *s)
   s->_stdin = __sfp(s);
   s->_stdout = __sfp(s);
   s->_stderr = __sfp(s);
-# else
+# else /* _REENT_GLOBAL_STDIO_STREAMS */
   s->_stdin = &__sf[0];
   s->_stdout = &__sf[1];
   s->_stderr = &__sf[2];
-# endif
+# endif /* _REENT_GLOBAL_STDIO_STREAMS */
 #endif
 
 #ifdef _REENT_GLOBAL_STDIO_STREAMS
@@ -293,11 +293,11 @@ __sinit (struct _reent *s)
     stdout_init (&__sf[1]);
     stderr_init (&__sf[2]);
   }
-#else
+#else /* _REENT_GLOBAL_STDIO_STREAMS */
   stdin_init (s->_stdin);
   stdout_init (s->_stdout);
   stderr_init (s->_stderr);
-#endif
+#endif /* _REENT_GLOBAL_STDIO_STREAMS */
 
   s->__sdidinit = 1;
 
