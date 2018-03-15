@@ -21,31 +21,21 @@
 #undef u_long
 #define u_long __ms_u_long
 #endif
-#include <ntsecapi.h>
-#include <ws2tcpip.h>
-#include <mswsock.h>
-#include <iphlpapi.h>
+#include <w32api/ws2tcpip.h>
+#include <w32api/mswsock.h>
+#include <unistd.h>
+#include <asm/byteorder.h>
+#include <sys/socket.h>
+#include <sys/param.h>
+#include <sys/statvfs.h>
+#include <cygwin/acl.h>
 #include "cygerrno.h"
-#include "security.h"
 #include "path.h"
 #include "fhandler.h"
 #include "dtable.h"
 #include "cygheap.h"
-#include <asm/byteorder.h>
-#include "cygwin/version.h"
-#include "perprocess.h"
 #include "shared_info.h"
-#include "sigproc.h"
 #include "wininfo.h"
-#include <unistd.h>
-#include <sys/param.h>
-#include <sys/statvfs.h>
-#include <cygwin/acl.h>
-#include "cygtls.h"
-#include <sys/un.h>
-#include "ntdll.h"
-#include "miscfuncs.h"
-#include "tls_pbuf.h"
 
 #define ASYNC_MASK (FD_READ|FD_WRITE|FD_OOB|FD_ACCEPT|FD_CONNECT)
 #define EVENT_MASK (FD_READ|FD_WRITE|FD_OOB|FD_ACCEPT|FD_CONNECT|FD_CLOSE)
@@ -211,6 +201,7 @@ fhandler_socket_wsock::fhandler_socket_wsock () :
   wsock_events (NULL),
   wsock_mtx (NULL),
   wsock_evt (NULL),
+  status (),
   prot_info_ptr (NULL)
 {
   need_fork_fixup (true);
@@ -708,6 +699,13 @@ fhandler_socket_inet::socket (int af, int type, int protocol, int flags)
   SOCKET sock;
   int ret;
 
+  /* This test should be covered by ::socket, but make sure we don't
+     accidentally try anything else. */
+  if (type != SOCK_STREAM && type != SOCK_DGRAM && type != SOCK_RAW)
+        {
+          set_errno (EINVAL);
+          return -1;
+        }
   sock = ::socket (af, type, protocol);
   if (sock == INVALID_SOCKET)
     {
@@ -718,6 +716,14 @@ fhandler_socket_inet::socket (int af, int type, int protocol, int flags)
   if (ret < 0)
     ::closesocket (sock);
   return ret;
+}
+
+int
+fhandler_socket_inet::socketpair (int af, int type, int protocol, int flags,
+				  fhandler_socket *fh_out)
+{
+  set_errno (EAFNOSUPPORT);
+  return -1;
 }
 
 int
@@ -890,6 +896,8 @@ fhandler_socket_inet::accept4 (struct sockaddr *peer, int *len, int flags)
 		  *len = llen;
 		}
 	    }
+	  else
+	    fd.release ();
 	}
       if (ret == -1)
 	::closesocket (res);

@@ -21,31 +21,23 @@
 #undef u_long
 #define u_long __ms_u_long
 #endif
-#include <ntsecapi.h>
-#include <ws2tcpip.h>
-#include <mswsock.h>
-#include <iphlpapi.h>
+#include <w32api/ntsecapi.h>
+#include <w32api/ws2tcpip.h>
+#include <w32api/mswsock.h>
+#include <unistd.h>
+#include <asm/byteorder.h>
+#include <sys/socket.h>
+#include <sys/un.h>
+#include <sys/param.h>
+#include <sys/statvfs.h>
+#include <cygwin/acl.h>
 #include "cygerrno.h"
-#include "security.h"
 #include "path.h"
 #include "fhandler.h"
 #include "dtable.h"
 #include "cygheap.h"
-#include <asm/byteorder.h>
-#include "cygwin/version.h"
-#include "perprocess.h"
-#include "shared_info.h"
-#include "sigproc.h"
 #include "wininfo.h"
-#include <unistd.h>
-#include <sys/param.h>
-#include <sys/statvfs.h>
-#include <cygwin/acl.h>
-#include "cygtls.h"
-#include <sys/un.h>
 #include "ntdll.h"
-#include "miscfuncs.h"
-#include "tls_pbuf.h"
 
 extern "C" {
   int sscanf (const char *, const char *, ...);
@@ -241,6 +233,16 @@ fhandler_socket_local::socket (int af, int type, int protocol, int flags)
   SOCKET sock;
   int ret;
 
+  if (type != SOCK_STREAM && type != SOCK_DGRAM)
+    {
+      set_errno (EINVAL);
+      return -1;
+    }
+  if (protocol != 0)
+    {
+      set_errno (EPROTONOSUPPORT);
+      return -1;
+    }
   sock = ::socket (AF_INET, type, protocol);
   if (sock == INVALID_SOCKET)
     {
@@ -255,14 +257,26 @@ fhandler_socket_local::socket (int af, int type, int protocol, int flags)
 
 int
 fhandler_socket_local::socketpair (int af, int type, int protocol, int flags,
-				   fhandler_socket_local *fh_out)
+				   fhandler_socket *_fh_out)
 {
   SOCKET insock = INVALID_SOCKET;
   SOCKET outsock = INVALID_SOCKET;
   SOCKET sock = INVALID_SOCKET;
   struct sockaddr_in sock_in, sock_out;
   int len;
+  fhandler_socket_local *fh_out = reinterpret_cast<fhandler_socket_local *>
+				  (_fh_out);
 
+  if (type != SOCK_STREAM && type != SOCK_DGRAM)
+        {
+          set_errno (EINVAL);
+          return -1;
+        }
+  if (protocol != 0)
+    {
+      set_errno (EPROTONOSUPPORT);
+      return -1;
+    }
   /* create listening socket */
   sock = ::socket (AF_INET, type, 0);
   if (sock == INVALID_SOCKET)
@@ -998,6 +1012,8 @@ fhandler_socket_local::accept4 (struct sockaddr *peer, int *len, int flags)
 		  *len = (int) sizeof (un.sun_family);
 		}
 	    }
+	  else
+	    fd.release ();
 	}
       if (ret == -1)
 	::closesocket (res);

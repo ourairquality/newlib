@@ -19,35 +19,21 @@ details. */
 #undef u_long
 #define u_long __ms_u_long
 #endif
-#include <ws2tcpip.h>
-#include <mswsock.h>
-#include <iphlpapi.h>
-#include "miscfuncs.h"
-#include <ctype.h>
-#include <wchar.h>
-#include <stdlib.h>
+#include <w32api/ws2tcpip.h>
+#include <w32api/mswsock.h>
+#include <w32api/iphlpapi.h>
 #define gethostname cygwin_gethostname
 #include <unistd.h>
 #undef gethostname
+#include <ifaddrs.h>
 #include <netdb.h>
-#include <cygwin/in.h>
 #include <asm/byteorder.h>
-#include <assert.h>
-#include "cygerrno.h"
-#include "security.h"
-#include "cygwin/version.h"
 #include "shared_info.h"
-#include "perprocess.h"
 #include "path.h"
 #include "fhandler.h"
 #include "dtable.h"
 #include "cygheap.h"
-#include "sigproc.h"
-#include "registry.h"
-#include "cygtls.h"
-#include "ifaddrs.h"
 #include "tls_pbuf.h"
-#include "ntdll.h"
 
 /* Unfortunately defined in Windows header files and arpa/nameser_compat.h. */
 #undef NOERROR
@@ -455,8 +441,6 @@ dup_ent (unionent *&dst, unionent *src, unionent::struct_type type)
 	      dp += DWORD_round (src->h_len);
 	    }
 	}
-      /* Sanity check that we did our bookkeeping correctly. */
-      assert ((dp - (char *) dst) == sz);
     }
   debug_printf ("duped %sent \"%s\", %p", entnames[type], dst ? dst->name : "<null!>", dst);
   return dst;
@@ -517,25 +501,10 @@ cygwin_socket (int af, int type, int protocol)
     {
     case AF_LOCAL:
     case AF_UNIX:
-      if (type != SOCK_STREAM && type != SOCK_DGRAM)
-        {
-          set_errno (EINVAL);
-          goto done;
-        }
-      if (protocol != 0)
-        {
-          set_errno (EPROTONOSUPPORT);
-          goto done;
-        }
       dev = (af == AF_LOCAL) ? af_local_dev : af_unix_dev;
       break;
     case AF_INET:
     case AF_INET6:
-      if (type != SOCK_STREAM && type != SOCK_DGRAM && type != SOCK_RAW)
-        {
-          set_errno (EINVAL);
-          goto done;
-        }
       dev = af_inet_dev;
       break;
     default:
@@ -563,7 +532,10 @@ cygwin_socket (int af, int type, int protocol)
 	  res = fd;
 	}
       else
-        fd.release ();
+	{
+	  delete fh;
+	  fd.release ();
+	}
     }
 
 done:
@@ -2299,11 +2271,11 @@ cygwin_bindresvport (int fd, struct sockaddr_in *sin)
 
 /* socketpair: POSIX.1-2001, POSIX.1-2008, 4.4BSD. */
 extern "C" int
-socketpair (int af, int type, int protocol, int *sb)
+socketpair (int af, int type, int protocol, int sv[2])
 {
   int res = -1;
   const device *dev;
-  fhandler_socket_local *fh_in, *fh_out;
+  fhandler_socket *fh_in, *fh_out;
 
   int flags = type & _SOCK_FLAG_MASK;
   type &= ~_SOCK_FLAG_MASK;
@@ -2314,16 +2286,6 @@ socketpair (int af, int type, int protocol, int *sb)
     {
     case AF_LOCAL:
     case AF_UNIX:
-      if (type != SOCK_STREAM && type != SOCK_DGRAM)
-        {
-          set_errno (EINVAL);
-          goto done;
-        }
-      if (protocol != 0)
-        {
-          set_errno (EPROTONOSUPPORT);
-          goto done;
-        }
       dev = (af == AF_LOCAL) ? af_local_dev : af_unix_dev;
       break;
     default:
@@ -2349,8 +2311,8 @@ socketpair (int af, int type, int protocol, int *sb)
 	  goto done;
 	}
 
-      fh_in = reinterpret_cast<fhandler_socket_local *> (build_fh_dev (*dev));
-      fh_out = reinterpret_cast<fhandler_socket_local *> (build_fh_dev (*dev));
+      fh_in = reinterpret_cast<fhandler_socket *> (build_fh_dev (*dev));
+      fh_out = reinterpret_cast<fhandler_socket *> (build_fh_dev (*dev));
       if (fh_in && fh_out
 	  && fh_in->socketpair (af, type, protocol, flags, fh_out) == 0)
 	{
@@ -2362,8 +2324,8 @@ socketpair (int af, int type, int protocol, int *sb)
 	    set_std_handle (fd_out);
 	  __try
 	    {
-	      sb[0] = fd_in;
-	      sb[1] = fd_out;
+	      sv[0] = fd_in;
+	      sv[1] = fd_out;
 	      res = 0;
 	    }
 	  __except (EFAULT) {}
@@ -2371,6 +2333,8 @@ socketpair (int af, int type, int protocol, int *sb)
 	}
       else
 	{
+	  delete fh_in;
+	  delete fh_out;
 	  fd_in.release ();
 	  fd_out.release ();
 	}

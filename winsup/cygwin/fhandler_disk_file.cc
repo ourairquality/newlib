@@ -1249,19 +1249,18 @@ fhandler_disk_file::link (const char *newpath)
       /* An O_TMPFILE file has FILE_ATTRIBUTE_TEMPORARY and
 	 FILE_ATTRIBUTE_HIDDEN set.  After a successful hardlink the file is
 	 not temporary anymore in the usual sense.  So we remove these
-	 attributes here, even if this makes the original link (temporarily)
-	 visible in directory enumeration.
+	 attributes here.
 
 	 Note that we don't create a reopen attribute for the original
 	 link but rather a normal attribute for the just created link.
-	 The reason is a curious behaviour of Windows:  If we remove
-	 the O_TMPFILE attributes on the original link, the new link
-	 will not show up in file system listings, long after the original
-	 link has been closed and removed.  The file and its metadata will
-	 be kept in memory only as long as Windows sees fit.  By opening
-	 the new link, we request the attribute changes on the new link,
-	 so after closing it Windows will have an increased interest to
-	 write back the metadata. */
+	 The reason is a curious behaviour of Windows:  If we remove the
+	 O_TMPFILE attributes on the original link, the new link will not
+	 show up in file system listings (not even native ones from , e.g.,
+	 `cmd /c dir'), long after the original link has been closed and
+	 removed.  The file and its metadata will be kept in memory only
+	 as long as Windows sees fit.  By opening the new link, we request
+	 the attribute changes on the new link, so after closing it Windows
+	 will have an increased interest to write back the metadata. */
       OBJECT_ATTRIBUTES attr;
       status = NtOpenFile (&fh, FILE_WRITE_ATTRIBUTES,
 			   newpc.get_object_attr (attr, sec_none_nih), &io,
@@ -1977,7 +1976,7 @@ readdir_get_ino (const char *path, bool dot_dot)
 				      pc.get_object_attr (attr, sec_none_nih),
 				      &io, FILE_SHARE_VALID_FLAGS,
 				      FILE_OPEN_FOR_BACKUP_INTENT
-				      | (pc.is_rep_symlink ()
+				      | (pc.is_known_reparse_point ()
 				      ? FILE_OPEN_REPARSE_POINT : 0)))
 	  )
     {
@@ -2107,7 +2106,6 @@ fhandler_disk_file::readdir (DIR *dir, dirent *de)
 
   /* d_cachepos always refers to the next cache entry to use.  If it's 0
      we must reload the cache. */
-restart:
   FileAttributes = 0;
   if (d_cachepos (dir) == 0)
     {
@@ -2222,10 +2220,6 @@ go_ahead:
 	  FileAttributes =
 		((PFILE_BOTH_DIR_INFORMATION) buf)->FileAttributes;
 	}
-      /* We don't show O_TMPFILE files in the filesystem.  This is a kludge,
-	 so we may end up removing this snippet again. */
-      if ((FileAttributes & O_TMPFILE_FILE_ATTRS) == O_TMPFILE_FILE_ATTRS)
-	goto restart;
       RtlInitCountedUnicodeString (&fname, FileName, FileNameLength);
       d_mounts (dir)->check_mount (&fname);
       if (de->d_ino == 0 && (dir->__flags & dirent_set_d_ino))
@@ -2362,7 +2356,7 @@ fhandler_disk_file::closedir (DIR *dir)
 }
 
 fhandler_cygdrive::fhandler_cygdrive () :
-  fhandler_disk_file (), ndrives (0), pdrive (NULL)
+  fhandler_disk_file ()
 {
 }
 
@@ -2381,13 +2375,6 @@ fhandler_cygdrive::open (int flags, mode_t mode)
     }
   /* Open a fake handle to \\Device\\Null */
   return open_null (flags);
-}
-
-void
-fhandler_cygdrive::set_drives ()
-{
-  pdrive = pdrive_buf;
-  ndrives = GetLogicalDriveStrings (sizeof pdrive_buf, pdrive_buf) / DRVSZ;
 }
 
 int
@@ -2412,14 +2399,28 @@ fhandler_cygdrive::fstatvfs (struct statvfs *sfs)
   return 0;
 }
 
+#define MAX_DRIVE_BUF_LEN	(sizeof ("x:\\") * 26 + 2)
+
+struct __DIR_drives
+{
+  char *pdrive;
+  char  pbuf[MAX_DRIVE_BUF_LEN];
+};
+
+#define d_drives(d)	((__DIR_drives *) (d)->__d_internal)
+
 DIR *
 fhandler_cygdrive::opendir (int fd)
 {
   DIR *dir;
 
   dir = fhandler_disk_file::opendir (fd);
-  if (dir && !ndrives)
-    set_drives ();
+  if (dir)
+    {
+      dir->__d_internal = (uintptr_t) new __DIR_drives;
+      GetLogicalDriveStrings (MAX_DRIVE_BUF_LEN, d_drives(dir)->pbuf);
+      d_drives(dir)->pdrive = d_drives(dir)->pbuf;
+    }
 
   return dir;
 }
@@ -2431,7 +2432,7 @@ fhandler_cygdrive::readdir (DIR *dir, dirent *de)
 
   while (true)
     {
-      if (!pdrive || !*pdrive)
+      if (!d_drives(dir)->pdrive || !*d_drives(dir)->pdrive)
 	{
 	  if (!(dir->__flags & dirent_saw_dot))
 	    {
@@ -2441,7 +2442,7 @@ fhandler_cygdrive::readdir (DIR *dir, dirent *de)
 	    }
 	  return ENMFILE;
 	}
-      disk_type dt = get_disk_type ((drive[0] = *pdrive, drive));
+      disk_type dt = get_disk_type ((drive[0] = *d_drives(dir)->pdrive, drive));
       if (dt == DT_SHARE_SMB)
 	{
 	  /* Calling NetUseGetInfo on SMB drives allows to fetch the
@@ -2463,16 +2464,16 @@ fhandler_cygdrive::readdir (DIR *dir, dirent *de)
 	    }
 	}
       else if (dt != DT_FLOPPY
-	       && GetFileAttributes (pdrive) != INVALID_FILE_ATTRIBUTES)
+	       && GetFileAttributes (d_drives(dir)->pdrive) != INVALID_FILE_ATTRIBUTES)
 	break;
-      pdrive = strchr (pdrive, '\0') + 1;
+      d_drives(dir)->pdrive = strchr (d_drives(dir)->pdrive, '\0') + 1;
     }
-  *de->d_name = cyg_tolower (*pdrive);
+  *de->d_name = cyg_tolower (*d_drives(dir)->pdrive);
   de->d_name[1] = '\0';
   user_shared->warned_msdos = true;
-  de->d_ino = readdir_get_ino (pdrive, false);
+  de->d_ino = readdir_get_ino (d_drives(dir)->pdrive, false);
   dir->__d_position++;
-  pdrive = strchr (pdrive, '\0') + 1;
+  d_drives(dir)->pdrive = strchr (d_drives(dir)->pdrive, '\0') + 1;
   syscall_printf ("%p = readdir (%p) (%s)", &de, dir, de->d_name);
   return 0;
 }
@@ -2480,13 +2481,13 @@ fhandler_cygdrive::readdir (DIR *dir, dirent *de)
 void
 fhandler_cygdrive::rewinddir (DIR *dir)
 {
-  pdrive = pdrive_buf;
+  d_drives(dir)->pdrive = d_drives(dir)->pbuf;
   dir->__d_position = 0;
 }
 
 int
 fhandler_cygdrive::closedir (DIR *dir)
 {
-  pdrive = pdrive_buf;
+  delete d_drives(dir);
   return 0;
 }

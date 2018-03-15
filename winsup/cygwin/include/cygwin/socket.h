@@ -47,12 +47,7 @@ struct sockaddr_storage {
 #include <asm/socket.h>			/* arch-dependent defines	*/
 #include <cygwin/sockios.h>		/* the SIOCxxx I/O controls	*/
 #include <sys/uio.h>			/* iovec support		*/
-
-struct ucred {
-  pid_t			pid;
-  uid_t			uid;
-  gid_t			gid;
-};
+#include <cygwin/_ucred.h>		/* struct ucred			*/
 
 struct linger {
   unsigned short	l_onoff;	/* Linger active	*/
@@ -209,6 +204,9 @@ struct OLD_msghdr
 /* Windows-specific flag values returned by recvmsg. */
 #define MSG_BCAST	0x0400		/* Broadcast datagram */
 #define MSG_MCAST	0x0800		/* Multicast datagram */
+/* AF_UNIX specific */
+#define MSG_CMSG_CLOEXEC 0x1000		/* Set O_CLOEXEC on fd's passed via
+					   SCM_RIGHTS */
 
 /* Setsockoptions(2) level. Thanks to BSD these must match IPPROTO_xxx */
 #define SOL_IP		0

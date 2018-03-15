@@ -11,6 +11,8 @@ details. */
 
 #include "tty.h"
 #include <cygwin/_socketflags.h>
+#include <cygwin/_ucred.h>
+#include <sys/un.h>
 
 /* fcntl flags used only internaly. */
 #define O_NOSYMLINK	0x080000
@@ -74,13 +76,21 @@ enum dirent_states
   dirent_info_mask	= 0x0078
 };
 
+enum bind_state
+{
+  unbound = 0,
+  bind_pending = 1,
+  bound = 2
+};
+
 enum conn_state
 {
   unconnected = 0,
   connect_pending = 1,
   connected = 2,
   listener = 3,
-  connect_failed = 4
+  connect_failed = 4	/* FIXME: Do we really need this?  It's basically
+				  the same thing as unconnected. */
 };
 
 enum line_edit_status
@@ -515,27 +525,6 @@ class fhandler_socket: public fhandler_base
   DWORD &rcvtimeo () { return _rcvtimeo; }
   DWORD &sndtimeo () { return _sndtimeo; }
 
- protected:
-  struct status_flags
-  {
-    unsigned async_io		   : 1; /* async I/O */
-    unsigned saw_shutdown_read     : 1; /* Socket saw a SHUT_RD */
-    unsigned saw_shutdown_write    : 1; /* Socket saw a SHUT_WR */
-    unsigned saw_reuseaddr	   : 1; /* Socket saw SO_REUSEADDR call */
-    unsigned connect_state	   : 3;
-   public:
-    status_flags () :
-      async_io (0), saw_shutdown_read (0), saw_shutdown_write (0),
-      saw_reuseaddr (0), connect_state (unconnected)
-      {}
-  } status;
- public:
-  IMPLEMENT_STATUS_FLAG (bool, async_io)
-  IMPLEMENT_STATUS_FLAG (bool, saw_shutdown_read)
-  IMPLEMENT_STATUS_FLAG (bool, saw_shutdown_write)
-  IMPLEMENT_STATUS_FLAG (bool, saw_reuseaddr)
-  IMPLEMENT_STATUS_FLAG (conn_state, connect_state)
-
  public:
   fhandler_socket ();
   ~fhandler_socket ();
@@ -544,6 +533,8 @@ class fhandler_socket: public fhandler_base
   char *get_proc_fd_name (char *buf);
 
   virtual int socket (int af, int type, int protocol, int flags) = 0;
+  virtual int socketpair (int af, int type, int protocol, int flags,
+			  fhandler_socket *fh_out) = 0;
   virtual int bind (const struct sockaddr *name, int namelen) = 0;
   virtual int listen (int backlog) = 0;
   virtual int accept4 (struct sockaddr *peer, int *len, int flags) = 0;
@@ -619,6 +610,27 @@ class fhandler_socket_wsock: public fhandler_socket
   const LONG serial_number () const { return wsock_events->serial_number; }
 
  protected:
+  struct status_flags
+  {
+    unsigned async_io		   : 1; /* async I/O */
+    unsigned saw_shutdown_read     : 1; /* Socket saw a SHUT_RD */
+    unsigned saw_shutdown_write    : 1; /* Socket saw a SHUT_WR */
+    unsigned saw_reuseaddr	   : 1; /* Socket saw SO_REUSEADDR call */
+    unsigned connect_state	   : 3;
+   public:
+    status_flags () :
+      async_io (0), saw_shutdown_read (0), saw_shutdown_write (0),
+      saw_reuseaddr (0), connect_state (unconnected)
+      {}
+  } status;
+ public:
+  IMPLEMENT_STATUS_FLAG (bool, async_io)
+  IMPLEMENT_STATUS_FLAG (bool, saw_shutdown_read)
+  IMPLEMENT_STATUS_FLAG (bool, saw_shutdown_write)
+  IMPLEMENT_STATUS_FLAG (bool, saw_reuseaddr)
+  IMPLEMENT_STATUS_FLAG (conn_state, connect_state)
+
+ protected:
   struct _WSAPROTOCOL_INFOW *prot_info_ptr;
  public:
   bool need_fixup_before () const {return prot_info_ptr != NULL;}
@@ -683,6 +695,8 @@ class fhandler_socket_inet: public fhandler_socket_wsock
   ~fhandler_socket_inet ();
 
   int socket (int af, int type, int protocol, int flags);
+  int socketpair (int af, int type, int protocol, int flags,
+		  fhandler_socket *fh_out);
   int bind (const struct sockaddr *name, int namelen);
   int listen (int backlog);
   int accept4 (struct sockaddr *peer, int *len, int flags);
@@ -769,7 +783,7 @@ class fhandler_socket_local: public fhandler_socket_wsock
 
   int socket (int af, int type, int protocol, int flags);
   int socketpair (int af, int type, int protocol, int flags,
-		  fhandler_socket_local *fh_out);
+		  fhandler_socket *fh_out);
   int bind (const struct sockaddr *name, int namelen);
   int listen (int backlog);
   int accept4 (struct sockaddr *peer, int *len, int flags);
@@ -811,24 +825,154 @@ class fhandler_socket_local: public fhandler_socket_wsock
   }
 };
 
+class sun_name_t
+{
+ public:
+  __socklen_t un_len;
+  union
+    {
+      struct sockaddr_un un;
+      /* Allows 108 bytes sun_path plus trailing NUL */
+      char _nul[sizeof (struct sockaddr_un) + 1];
+    };
+  sun_name_t ();
+  sun_name_t (const struct sockaddr *name, __socklen_t namelen);
+
+  void *operator new (size_t) __attribute__ ((nothrow))
+    { return cmalloc_abort (HEAP_FHANDLER, sizeof (sun_name_t)); }
+  void operator delete (void *p) {cfree (p);}
+};
+
+/* Internal representation of shutdown states */
+enum shut_state {
+  _SHUT_READ	= 1,
+  _SHUT_WRITE	= 2,
+  _SHUT_RW	= 3
+};
+
+/* For each AF_UNIX socket, we need to maintain socket-wide data,
+   regardless of the number of descriptors.  The shmem region gets created
+   in socket, socketpair or accept4 and reopened by dup, fork or exec. */
+class af_unix_shmem_t
+{
+  SRWLOCK _bind_lock;
+  SRWLOCK _conn_lock;
+  SRWLOCK _io_lock;
+  LONG _connection_state;	/* conn_state */
+  LONG _binding_state;		/* bind_state */
+  LONG _shutdown;		/* shut_state */
+  LONG _so_error;		/* SO_ERROR */
+  LONG _reuseaddr;		/* dummy */
+
+ public:
+  af_unix_shmem_t ()
+  : _connection_state (unconnected), _binding_state (unbound),
+    _shutdown (0), _so_error (0)
+  {
+    InitializeSRWLock (&_bind_lock);
+    InitializeSRWLock (&_conn_lock);
+    InitializeSRWLock (&_io_lock);
+  }
+  void bind_lock () { AcquireSRWLockExclusive (&_bind_lock); }
+  void bind_unlock () { ReleaseSRWLockExclusive (&_bind_lock); }
+  void conn_lock () { AcquireSRWLockExclusive (&_conn_lock); }
+  void conn_unlock () { ReleaseSRWLockExclusive (&_conn_lock); }
+  void io_lock () { AcquireSRWLockExclusive (&_io_lock); }
+  void io_unlock () { ReleaseSRWLockExclusive (&_io_lock); }
+
+  conn_state connect_state (conn_state val)
+    { return (conn_state) InterlockedExchange (&_connection_state, val); }
+  conn_state connect_state () const { return (conn_state) _connection_state; }
+
+  bind_state binding_state (bind_state val)
+    { return (bind_state) InterlockedExchange (&_binding_state, val); }
+  bind_state binding_state () const { return (bind_state) _binding_state; }
+
+  int shutdown (int shut)
+    { return (int) InterlockedExchange (&_shutdown, shut); }
+  int shutdown () const { return (int) _shutdown; }
+
+  int so_error (int err)
+    { return (int) InterlockedExchange (&_so_error, err); }
+  int so_error () const { return _so_error; }
+
+  int reuseaddr (int val)
+    { return (int) InterlockedExchange (&_reuseaddr, val); }
+  int reuseaddr () const { return _reuseaddr; }
+};
+
 class fhandler_socket_unix : public fhandler_socket
 {
  protected:
-  char *sun_path;
-  char *peer_sun_path;
-  void set_sun_path (const char *path);
-  char *get_sun_path () {return sun_path;}
-  void set_peer_sun_path (const char *path);
-  char *get_peer_sun_path () {return peer_sun_path;}
-  void set_cred ();
+  HANDLE shmem_handle;		/* Shared memory region used to share
+				   socket-wide state. */
+  af_unix_shmem_t *shmem;
+  HANDLE backing_file_handle;	/* Either NT symlink or INVALID_HANDLE_VALUE,
+				   if the socket is backed by a file in the
+				   file system (actually a reparse point) */
+  HANDLE connect_wait_thr;
+  HANDLE cwt_termination_evt;
+  PVOID cwt_param;
+  sun_name_t *sun_path;
+  sun_name_t *peer_sun_path;
+  struct ucred peer_cred;
 
- protected:
-  pid_t sec_pid;
-  uid_t sec_uid;
-  gid_t sec_gid;
-  pid_t sec_peer_pid;
-  uid_t sec_peer_uid;
-  gid_t sec_peer_gid;
+  void bind_lock () { shmem->bind_lock (); }
+  void bind_unlock () { shmem->bind_unlock (); }
+  void conn_lock () { shmem->conn_lock (); }
+  void conn_unlock () { shmem->conn_unlock (); }
+  void io_lock () { shmem->io_lock (); }
+  void io_unlock () { shmem->io_unlock (); }
+  conn_state connect_state (conn_state val)
+    { return shmem->connect_state (val); }
+  conn_state connect_state () const { return shmem->connect_state (); }
+  bind_state binding_state (bind_state val)
+    { return shmem->binding_state (val); }
+  bind_state binding_state () const { return shmem->binding_state (); }
+  int saw_shutdown (int shut) { return shmem->shutdown (shut); }
+  int saw_shutdown () const { return shmem->shutdown (); }
+  int so_error (int err) { return shmem->so_error (err); }
+  int so_error () const { return shmem->so_error (); }
+  int reuseaddr (int err) { return shmem->reuseaddr (err); }
+  int reuseaddr () const { return shmem->reuseaddr (); }
+
+  int create_shmem ();
+  int reopen_shmem ();
+  void gen_pipe_name ();
+  static HANDLE create_abstract_link (const sun_name_t *sun,
+				      PUNICODE_STRING pipe_name);
+  static HANDLE create_reparse_point (const sun_name_t *sun,
+				      PUNICODE_STRING pipe_name);
+  HANDLE create_file (const sun_name_t *sun);
+  static int open_abstract_link (sun_name_t *sun, PUNICODE_STRING pipe_name);
+  static int open_reparse_point (sun_name_t *sun, PUNICODE_STRING pipe_name);
+  static int open_file (sun_name_t *sun, int &type, PUNICODE_STRING pipe_name);
+  HANDLE autobind (sun_name_t *sun);
+  wchar_t get_type_char ();
+  void set_pipe_non_blocking (bool nonblocking);
+  int send_my_name ();
+  int recv_peer_name ();
+  static NTSTATUS npfs_handle (HANDLE &nph);
+  HANDLE create_pipe (bool single_instance);
+  HANDLE create_pipe_instance ();
+  NTSTATUS open_pipe (PUNICODE_STRING pipe_name, bool send_name);
+  int wait_pipe (PUNICODE_STRING pipe_name);
+  int connect_pipe (PUNICODE_STRING pipe_name);
+  int listen_pipe ();
+  int disconnect_pipe (HANDLE ph);
+  sun_name_t *get_sun_path () {return sun_path;}
+  sun_name_t *get_peer_sun_path () {return peer_sun_path;}
+  void set_sun_path (struct sockaddr_un *un, __socklen_t unlen);
+  void set_sun_path (sun_name_t *snt)
+    { snt ? set_sun_path (&snt->un, snt->un_len) : set_sun_path (NULL, 0); }
+  void set_peer_sun_path (struct sockaddr_un *un, __socklen_t unlen);
+  void set_peer_sun_path (sun_name_t *snt)
+    { snt ? set_peer_sun_path (&snt->un, snt->un_len)
+	  : set_peer_sun_path (NULL, 0); }
+  void set_cred ();
+  void fixup_after_fork (HANDLE parent);
+  void fixup_after_exec ();
+  void set_close_on_exec (bool val);
 
  public:
   fhandler_socket_unix ();
@@ -836,9 +980,11 @@ class fhandler_socket_unix : public fhandler_socket
 
   int dup (fhandler_base *child, int);
 
+  DWORD wait_pipe_thread (PUNICODE_STRING pipe_name);
+
   int socket (int af, int type, int protocol, int flags);
   int socketpair (int af, int type, int protocol, int flags,
-		  fhandler_socket_unix *fh_out);
+		  fhandler_socket *fh_out);
   int bind (const struct sockaddr *name, int namelen);
   int listen (int backlog);
   int accept4 (struct sockaddr *peer, int *len, int flags);
@@ -848,18 +994,19 @@ class fhandler_socket_unix : public fhandler_socket
   int shutdown (int how);
   int close ();
   int getpeereid (pid_t *pid, uid_t *euid, gid_t *egid);
+  ssize_t recvmsg (struct msghdr *msg, int flags);
   ssize_t recvfrom (void *ptr, size_t len, int flags,
 		    struct sockaddr *from, int *fromlen);
-  ssize_t recvmsg (struct msghdr *msg, int flags);
   void __reg3 read (void *ptr, size_t& len);
-  ssize_t __stdcall readv (const struct iovec *, int iovcnt,
+  ssize_t __stdcall readv (const struct iovec *const iov, int iovcnt,
 			   ssize_t tot = -1);
 
+  ssize_t sendmsg (const struct msghdr *msg, int flags);
   ssize_t sendto (const void *ptr, size_t len, int flags,
 		  const struct sockaddr *to, int tolen);
-  ssize_t sendmsg (const struct msghdr *msg, int flags);
   ssize_t __stdcall write (const void *ptr, size_t len);
-  ssize_t __stdcall writev (const struct iovec *, int iovcnt, ssize_t tot = -1);
+  ssize_t __stdcall writev (const struct iovec *const iov, int iovcnt,
+			    ssize_t tot = -1);
   int setsockopt (int level, int optname, const void *optval,
 		  __socklen_t optlen);
   int getsockopt (int level, int optname, const void *optval,
@@ -1346,14 +1493,6 @@ public:
 
 class fhandler_cygdrive: public fhandler_disk_file
 {
-  enum
-  {
-    DRVSZ = sizeof ("x:\\")
-  };
-  int ndrives;
-  const char *pdrive;
-  char pdrive_buf[1 + (2 * 26 * DRVSZ)];
-  void set_drives ();
  public:
   fhandler_cygdrive ();
   int open (int flags, mode_t mode);
