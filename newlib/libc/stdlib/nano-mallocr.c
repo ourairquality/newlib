@@ -537,7 +537,7 @@ void nano_malloc_insert_chunk(void *start, size_t size)
 {
     /* Align the chunk, and adjust the size. */
     chunk *aligned_start = (void *)ALIGN_TO((uintptr_t)start, CHUNK_ALIGN);
-    size_t offset = (uintptr_t)start - (uintptr_t)aligned_start;
+    size_t offset = (uintptr_t)aligned_start - (uintptr_t)start;
     size_t aligned_size = size - offset;
 
     if (aligned_size < MALLOC_MINCHUNK) return;
