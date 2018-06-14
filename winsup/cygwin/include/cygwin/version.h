@@ -10,8 +10,8 @@ details. */
    the Cygwin shared library".  This version is used to track important
    changes to the DLL and is mainly informative in nature. */
 
-#define CYGWIN_VERSION_DLL_MAJOR 2010
-#define CYGWIN_VERSION_DLL_MINOR 1
+#define CYGWIN_VERSION_DLL_MAJOR 2011
+#define CYGWIN_VERSION_DLL_MINOR 0
 
 /* Major numbers before CYGWIN_VERSION_DLL_EPOCH are incompatible. */
 
@@ -494,12 +494,13 @@ details. */
   323: scanf %l[ conversion.
   324: Export sigtimedwait.
   325: Export catclose, catgets, catopen.
+  326: Export clearenv
 
   Note that we forgot to bump the api for ualarm, strtoll, strtoull,
   sigaltstack, sethostname. */
 
 #define CYGWIN_VERSION_API_MAJOR 0
-#define CYGWIN_VERSION_API_MINOR 325
+#define CYGWIN_VERSION_API_MINOR 326
 
 /* There is also a compatibity version number associated with the shared memory
    regions.  It is incremented when incompatible changes are made to the shared
