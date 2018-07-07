@@ -458,6 +458,7 @@
 # else
 #  define __IEEE_LITTLE_ENDIAN
 # endif
+#endif
 
 #ifdef __CYGWIN__
 #define __OBSOLETE_MATH_DEFAULT 0
