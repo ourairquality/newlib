@@ -1,5 +1,5 @@
-/* Single-precision math error handling.
-   Copyright (c) 2017-2018 ARM Ltd.  All rights reserved.
+/* Single-precision sin function.
+   Copyright (c) 2018 Arm Ltd.  All rights reserved.
 
    Redistribution and use in source and binary forms, with or without
    modification, are permitted provided that the following conditions
@@ -27,63 +27,66 @@
 #include "fdlibm.h"
 #if !__OBSOLETE_MATH
 
+#include <math.h>
 #include "math_config.h"
+#include "sincosf.h"
 
-#if WANT_ERRNO
-#include <errno.h>
-/* NOINLINE reduces code size and avoids making math functions non-leaf
-   when the error handling is inlined.  */
-NOINLINE static float
-with_errnof (float y, int e)
+/* Fast sinf implementation.  Worst-case ULP is 0.56072, maximum relative
+   error is 0.5303p-23.  A single-step signed range reduction is used for
+   small values.  Large inputs have their range reduced using fast integer
+   arithmetic.
+*/
+float
+sinf (float y)
 {
-  errno = e;
-  return y;
+  double x = y;
+  double s;
+  int n;
+  const sincos_t *p = &__sincosf_table[0];
+
+  if (abstop12 (y) < abstop12 (pio4))
+    {
+      s = x * x;
+
+      if (unlikely (abstop12 (y) < abstop12 (0x1p-12f)))
+	{
+	  if (unlikely (abstop12 (y) < abstop12 (0x1p-126f)))
+	    /* Force underflow for tiny y.  */
+	    force_eval_float (s);
+	  return y;
+	}
+
+      return sinf_poly (x, s, p, 0);
+    }
+  else if (likely (abstop12 (y) < abstop12 (120.0f)))
+    {
+      x = reduce_fast (x, p, &n);
+
+      /* Setup the signs for sin and cos.  */
+      s = p->sign[n & 3];
+
+      if (n & 2)
+	p = &__sincosf_table[1];
+
+      return sinf_poly (x * s, x * x, p, n);
+    }
+  else if (abstop12 (y) < abstop12 (INFINITY))
+    {
+      uint32_t xi = asuint (y);
+      int sign = xi >> 31;
+
+      x = reduce_large (xi, &n);
+
+      /* Setup signs for sin and cos - include original sign.  */
+      s = p->sign[(n + sign) & 3];
+
+      if ((n + sign) & 2)
+	p = &__sincosf_table[1];
+
+      return sinf_poly (x * s, x * x, p, n);
+    }
+  else
+    return __math_invalidf (y);
 }
-#else
-#define with_errnof(x, e) (x)
+
 #endif
-
-/* NOINLINE prevents fenv semantics breaking optimizations.  */
-NOINLINE static float
-xflowf (uint32_t sign, float y)
-{
-  y = (sign ? -y : y) * y;
-  return with_errnof (y, ERANGE);
-}
-
-HIDDEN float
-__math_uflowf (uint32_t sign)
-{
-  return xflowf (sign, 0x1p-95f);
-}
-
-#if WANT_ERRNO_UFLOW
-/* Underflows to zero in some non-nearest rounding mode, setting errno
-   is valid even if the result is non-zero, but in the subnormal range.  */
-HIDDEN float
-__math_may_uflowf (uint32_t sign)
-{
-  return xflowf (sign, 0x1.4p-75f);
-}
-#endif
-
-HIDDEN float
-__math_oflowf (uint32_t sign)
-{
-  return xflowf (sign, 0x1p97f);
-}
-
-HIDDEN float
-__math_divzerof (uint32_t sign)
-{
-  float y = 0;
-  return with_errnof ((sign ? -1 : 1) / y, ERANGE);
-}
-
-HIDDEN float
-__math_invalidf (float x)
-{
-  float y = (x - x) / (x - x);
-  return isnan (x) ? y : with_errnof (y, EDOM);
-}
-#endif /* !__OBSOLETE_MATH */

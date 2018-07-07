@@ -1,5 +1,7 @@
-/* Single-precision math error handling.
-   Copyright (c) 2017-2018 ARM Ltd.  All rights reserved.
+/* Double-precision math error handling.
+   Copyright (c) 2018 ARM Ltd.  All rights reserved.
+
+   SPDX-License-Identifier: BSD-3-Clause
 
    Redistribution and use in source and binary forms, with or without
    modification, are permitted provided that the following conditions
@@ -13,10 +15,10 @@
       products derived from this software without specific prior written
       permission.
 
-   THIS SOFTWARE IS PROVIDED BY ARM LTD ``AS IS AND ANY EXPRESS OR IMPLIED
+   THIS SOFTWARE IS PROVIDED BY Arm LTD ``AS IS AND ANY EXPRESS OR IMPLIED
    WARRANTIES, INCLUDING, BUT NOT LIMITED TO, THE IMPLIED WARRANTIES OF
    MERCHANTABILITY AND FITNESS FOR A PARTICULAR PURPOSE ARE DISCLAIMED.
-   IN NO EVENT SHALL ARM LTD BE LIABLE FOR ANY DIRECT, INDIRECT, INCIDENTAL,
+   IN NO EVENT SHALL Arm LTD BE LIABLE FOR ANY DIRECT, INDIRECT, INCIDENTAL,
    SPECIAL, EXEMPLARY, OR CONSEQUENTIAL DAMAGES (INCLUDING, BUT NOT LIMITED
    TO, PROCUREMENT OF SUBSTITUTE GOODS OR SERVICES; LOSS OF USE, DATA, OR
    PROFITS; OR BUSINESS INTERRUPTION) HOWEVER CAUSED AND ON ANY THEORY OF
@@ -24,66 +26,76 @@
    NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY OUT OF THE USE OF THIS
    SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE. */
 
-#include "fdlibm.h"
-#if !__OBSOLETE_MATH
-
 #include "math_config.h"
 
 #if WANT_ERRNO
 #include <errno.h>
 /* NOINLINE reduces code size and avoids making math functions non-leaf
    when the error handling is inlined.  */
-NOINLINE static float
-with_errnof (float y, int e)
+NOINLINE static double
+with_errno (double y, int e)
 {
   errno = e;
   return y;
 }
 #else
-#define with_errnof(x, e) (x)
+#define with_errno(x, e) (x)
 #endif
 
-/* NOINLINE prevents fenv semantics breaking optimizations.  */
-NOINLINE static float
-xflowf (uint32_t sign, float y)
+/* NOINLINE reduces code size.  */
+NOINLINE static double
+xflow (uint32_t sign, double y)
 {
-  y = (sign ? -y : y) * y;
-  return with_errnof (y, ERANGE);
+  y = opt_barrier_double (sign ? -y : y) * y;
+  return with_errno (y, ERANGE);
 }
 
-HIDDEN float
-__math_uflowf (uint32_t sign)
+HIDDEN double
+__math_uflow (uint32_t sign)
 {
-  return xflowf (sign, 0x1p-95f);
+  return xflow (sign, 0x1p-767);
 }
 
 #if WANT_ERRNO_UFLOW
 /* Underflows to zero in some non-nearest rounding mode, setting errno
    is valid even if the result is non-zero, but in the subnormal range.  */
-HIDDEN float
-__math_may_uflowf (uint32_t sign)
+HIDDEN double
+__math_may_uflow (uint32_t sign)
 {
-  return xflowf (sign, 0x1.4p-75f);
+  return xflow (sign, 0x1.8p-538);
 }
 #endif
 
-HIDDEN float
-__math_oflowf (uint32_t sign)
+HIDDEN double
+__math_oflow (uint32_t sign)
 {
-  return xflowf (sign, 0x1p97f);
+  return xflow (sign, 0x1p769);
 }
 
-HIDDEN float
-__math_divzerof (uint32_t sign)
+HIDDEN double
+__math_divzero (uint32_t sign)
 {
-  float y = 0;
-  return with_errnof ((sign ? -1 : 1) / y, ERANGE);
+  double y = opt_barrier_double (sign ? -1.0 : 1.0) / 0.0;
+  return with_errno (y, ERANGE);
 }
 
-HIDDEN float
-__math_invalidf (float x)
+HIDDEN double
+__math_invalid (double x)
 {
-  float y = (x - x) / (x - x);
-  return isnan (x) ? y : with_errnof (y, EDOM);
+  double y = (x - x) / (x - x);
+  return isnan (x) ? y : with_errno (y, EDOM);
 }
-#endif /* !__OBSOLETE_MATH */
+
+/* Check result and set errno if necessary.  */
+
+HIDDEN double
+__math_check_uflow (double y)
+{
+  return y == 0.0 ? with_errno (y, ERANGE) : y;
+}
+
+HIDDEN double
+__math_check_oflow (double y)
+{
+  return isinf (y) ? with_errno (y, ERANGE) : y;
+}
