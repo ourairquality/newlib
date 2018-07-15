@@ -4305,11 +4305,40 @@ find_fast_cwd ()
      used on the system. */
   fcwd_access_t **f_cwd_ptr = find_fast_cwd_pointer ();
   if (!f_cwd_ptr)
-    small_printf ("Cygwin WARNING:\n"
+    {
+      bool warn = 1;
+
+#ifndef __x86_64__
+      #ifndef PROCESSOR_ARCHITECTURE_ARM64
+      #define PROCESSOR_ARCHITECTURE_ARM64 12
+      #endif
+
+      SYSTEM_INFO si;
+
+      /* Check if we're running in WOW64 on ARM64.  Skip the warning as long as
+	 there's no solution for finding the FAST_CWD pointer on that system.
+
+	 2018-07-12: Apparently current ARM64 WOW64 has a bug:
+	 It's GetNativeSystemInfo returns PROCESSOR_ARCHITECTURE_INTEL in
+	 wProcessorArchitecture.  Since that's an invalid value (a 32 bit
+	 host system hosting a 32 bit emulator for itself?) we can use this
+	 value as an indicator to skip the message as well. */
+      if (wincap.is_wow64 ())
+	{
+	  GetNativeSystemInfo (&si);
+	  if (si.wProcessorArchitecture == PROCESSOR_ARCHITECTURE_ARM64
+	      || si.wProcessorArchitecture == PROCESSOR_ARCHITECTURE_INTEL)
+	    warn = 0;
+	}
+#endif /* !__x86_64__ */
+
+      if (warn)
+	small_printf ("Cygwin WARNING:\n"
 "  Couldn't compute FAST_CWD pointer.  This typically occurs if you're using\n"
 "  an older Cygwin version on a newer Windows.  Please update to the latest\n"
 "  available Cygwin version from https://cygwin.com/.  If the problem persists,\n"
 "  please see https://cygwin.com/problems.html\n\n");
+    }
   if (f_cwd_ptr && *f_cwd_ptr)
     {
       /* Just evaluate structure version. */
@@ -4390,43 +4419,38 @@ cwdstuff::override_win32_cwd (bool init, ULONG old_dismount_count)
     }
   else
     {
-      /* This is more a hack, and it's only used if we failed to find the
-	 fast_cwd_ptr value.  We call RtlSetCurrentDirectory_U and let it
-	 set up a new FAST_CWD structure.  Afterwards, compute the address
-	 of that structure utilizing the fact that the buffer address in
-	 the user process parameter block is actually pointing to the buffer
-	 in that FAST_CWD structure.  Then replace the directory handle in
-	 that structure with our own handle and close the original one.
+      /* Fallback if we failed to find the fast_cwd_ptr value:
 
-	 Note that the call to RtlSetCurrentDirectory_U also closes our
-	 old dir handle, so there won't be any handle left open.
+	 - Call RtlSetCurrentDirectory_U.
+	 - Compute new FAST_CWD struct address from buffer pointer in the
+	   user process parameter block.
+	 - Replace the directory handle in the struct with our own handle.
+	 - Close the original handle.  RtlSetCurrentDirectory_U already
+	   closed our former dir handle -> no handle leak.
 
-	 This method is prone to two race conditions:
+	 Guard the entire operation with FastPebLock to avoid races
+	 accessing the PEB and FAST_CWD struct.
 
-	 - Due to the way RtlSetCurrentDirectory_U opens the directory
-	   handle, the directory is locked against deletion or renaming
-	   between the RtlSetCurrentDirectory_U and the subsequent NtClose
-	   call.
+	 Unfortunately this method is still prone to a directory usage
+	 race condition:
 
-	 - When another thread calls SetCurrentDirectory at exactly the
-	   same time, a crash might occur, or worse, unrelated data could
-	   be overwritten or NtClose could be called on an unrelated handle.
-
-	 Therefore, use this *only* as a fallback. */
+	 - The directory is locked against deletion or renaming between the
+	   RtlSetCurrentDirectory_U and the subsequent NtClose call. */
+      if (unlikely (upp_cwd_hdl == NULL) && init)
+	return;
+      RtlEnterCriticalSection (peb.FastPebLock);
       if (!init)
 	{
 	  NTSTATUS status =
 	    RtlSetCurrentDirectory_U (error ? &ro_u_pipedir : &win32);
 	  if (!NT_SUCCESS (status))
 	    {
+	      RtlLeaveCriticalSection (peb.FastPebLock);
 	      debug_printf ("RtlSetCurrentDirectory_U(%S) failed, %y",
 			    error ? &ro_u_pipedir : &win32, status);
 	      return;
 	    }
 	}
-      else if (upp_cwd_hdl == NULL)
-	return;
-      RtlEnterCriticalSection (peb.FastPebLock);
       fcwd_access_t::SetDirHandleFromBufferPointer(upp_cwd_str.Buffer, dir);
       h = upp_cwd_hdl;
       upp_cwd_hdl = dir;
