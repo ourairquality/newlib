@@ -1,3 +1,4 @@
+#ifndef MALLOC_PROVIDED
 /*
  * Copyright (c) 2012, 2013 ARM Ltd
  * All rights reserved.
@@ -762,3 +763,5 @@ void * nano_pvalloc(RARG size_t s)
     return nano_valloc(RCALL ALIGN_TO(s, MALLOC_PAGE_ALIGN));
 }
 #endif /* DEFINE_PVALLOC */
+
+#endif /* MALLOC_PROVIDED */
