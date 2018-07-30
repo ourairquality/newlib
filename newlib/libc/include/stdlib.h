@@ -91,7 +91,8 @@ void *	bsearch (const void *__key,
 		       size_t __nmemb,
 		       size_t __size,
 		       __compar_fn_t _compar);
-void *	calloc (size_t __nmemb, size_t __size) _NOTHROW;
+void	*calloc(size_t, size_t) __malloc_like __result_use_check
+	     __alloc_size2(1, 2) _NOTHROW;
 div_t	div (int __numer, int __denom);
 void	exit (int __status) _ATTRIBUTE ((__noreturn__));
 void	free (void *) _NOTHROW;
@@ -105,7 +106,7 @@ int	getsubopt (char **, char * const *, char **);
 #endif
 long	labs (long);
 ldiv_t	ldiv (long __numer, long __denom);
-void *	malloc (size_t __size) _NOTHROW;
+void	*malloc(size_t) __malloc_like __result_use_check __alloc_size(1) _NOTHROW;
 int	mblen (const char *, size_t);
 int	_mblen_r (struct _reent *, const char *, size_t, _mbstate_t *);
 int	mbtowc (wchar_t *__restrict, const char *__restrict, size_t);
@@ -142,10 +143,10 @@ int	_mkstemps_r (struct _reent *, char *, int);
 char *	_mktemp_r (struct _reent *, char *) _ATTRIBUTE ((__deprecated__("the use of `mktemp' is dangerous; use `mkstemp' instead")));
 void	qsort (void *__base, size_t __nmemb, size_t __size, __compar_fn_t _compar);
 int	rand (void);
-void *	realloc (void *__r, size_t __size) _NOTHROW;
+void	*realloc(void *, size_t) __result_use_check __alloc_size(2) _NOTHROW;
 #if __BSD_VISIBLE
-void	*reallocarray(void *, size_t, size_t) __result_use_check __alloc_size((2,3));
-void *	reallocf (void *__r, size_t __size);
+void	*reallocarray(void *, size_t, size_t) __result_use_check __alloc_size2(2, 3);
+void	*reallocf(void *, size_t) __result_use_check __alloc_size(2);
 #endif
 #if __BSD_VISIBLE || __XSI_VISIBLE >= 4
 char *	realpath (const char *__restrict path, char *__restrict resolved_path);
@@ -328,8 +329,8 @@ extern long double strtold (const char *__restrict, char **__restrict);
  * If we're in a mode greater than C99, expose C11 functions.
  */
 #if __ISO_C_VISIBLE >= 2011
-void *	aligned_alloc(size_t, size_t) __malloc_like __alloc_align((1))
-	    __alloc_size((2));
+void *	aligned_alloc(size_t, size_t) __malloc_like __alloc_align(1)
+	    __alloc_size(2);
 int	at_quick_exit(void (*)(void));
 _Noreturn void
 	quick_exit(int);
